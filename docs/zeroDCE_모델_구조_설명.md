@@ -142,6 +142,9 @@ LE_n = LE_{n-1} + A_n * LE_{n-1} * (1 - LE_{n-1})
 
 ```
 Loss = L_spa + L_exp + L_col + L_tvA + λ * L_glare
+
+λ 기본값: 0.1
+λ 탐색 범위: 0.1 ~ 0.5 (PSNR 모니터링하며 조정)
 ```
 
 **이유:**  
@@ -150,7 +153,20 @@ Loss = L_spa + L_exp + L_col + L_tvA + λ * L_glare
 L_glare는 임계값(기본 0.8) 이상의 고강도 영역에 패널티를 주어 빛 번짐을 완화합니다.  
 자세한 구현은 `models/losses.py` (STEP 4) 참조.
 
-### 4-3. 모델 아키텍처는 동일
+### 4-3. 통합 단일 학습 (vs. 원본 비지도 학습)
+
+원본 Zero-DCE는 단계 구분 없이 단일 학습을 수행합니다. 이 프로젝트 역시 **단일 학습**으로 진행합니다.
+
+```
+LOL 데이터 (485쌍) + 커스텀 데이터 (600+쌍)
+    → prepare_data.py → data/processed/ 통합
+    → ZeroDCE 단일 학습 (epoch=200, lr=0.0001)
+    → zerodce_trained.pt
+```
+
+두 데이터셋을 섞어 학습하면 실내 저조도(LOL)와 야외 야간 운전(커스텀) 도메인의 다양성이 확보되어 일반화 성능에 유리합니다.
+
+### 4-4. 모델 아키텍처는 동일
 
 DCENet의 7층 CNN 구조, skip connection 방식, CurveAdjustment의 반복 수식은 **원본 논문과 동일**합니다.  
 파라미터 수 79,416개도 원본과 일치합니다.
@@ -171,14 +187,34 @@ DCENet의 7층 CNN 구조, skip connection 방식, CurveAdjustment의 반복 수
 
 ## 6. 검증 결과
 
+검증 스크립트: `validation/verify_model.py`
+
 ```
-$ python models/zerodce.py
+$ python validation/verify_model.py
 
 [INFO] 디바이스: cpu
-[INFO] 파라미터 수: 79,416  (목표: ~79K)
-[INFO] 입력 형상:         (1, 3, 192, 192)
-[INFO] 출력 형상:         (1, 3, 192, 192)
-[INFO] 곡선 파라미터 형상: (1, 24, 192, 192)
-[INFO] 역전파 검증:       통과
-[INFO] ✓ 모델 구조 검증 완료
+
+[INFO] 1. 모델 구조 검증
+[INFO] 전체 파라미터:   79,416
+[INFO] 학습 파라미터:   79,416  (목표: ~79,000)
+[INFO] ✓ 파라미터 수 검증 통과
+
+[INFO] 2. 입출력 형상 검증
+[INFO]   입력 (1, 3, 192, 192) → 출력 (1, 3, 192, 192)  ✓
+[INFO]   입력 (4, 3, 192, 192) → 출력 (4, 3, 192, 192)  ✓
+[INFO]   입력 (1, 3, 256, 256) → 출력 (1, 3, 256, 256)  ✓
+[INFO]   입력 (1, 3, 128, 128) → 출력 (1, 3, 128, 128)  ✓
+[INFO] ✓ 형상 검증 통과
+
+[INFO] 3. 역전파 검증
+[INFO] 모든 파라미터에 gradient 흐름 확인
+[INFO] ✓ 역전파 검증 통과
+
+[INFO] 4. 추론 속도 측정 (50프레임, device=cpu)
+[INFO] 평균 FPS:     15.7
+[INFO] 평균 지연시간: 63.5 ms/프레임
+[INFO] CPU 목표:    ≥ 20 FPS  →  ✗ 미달 (ONNX 최적화 전 수치)
 ```
+
+> **CPU FPS 참고:** 15.7 FPS는 PyTorch 미최적화 상태 기준입니다.  
+> STEP 7에서 ONNX 변환 + FP16 적용 후 **25~40 FPS** 달성 예정입니다.
