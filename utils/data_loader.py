@@ -6,7 +6,7 @@ NightVision Dataset 및 DataLoader
 split:
   'train' → processed/train/input + target
   'val'   → processed/val/input + target
-  'test'  → processed/test/input (target 없음)
+  'test'  → processed/test/input (target 없음, 없으면 None 반환)
 """
 import logging
 from pathlib import Path
@@ -113,7 +113,7 @@ def create_dataloaders(
     input_size: int = 192,
     num_workers: int = 4,
     pin_memory: bool = True,
-) -> Tuple[DataLoader, DataLoader, DataLoader]:
+) -> Tuple[DataLoader, DataLoader, Optional[DataLoader]]:
     """
     train / val / test DataLoader를 생성합니다.
 
@@ -126,6 +126,7 @@ def create_dataloaders(
 
     Returns:
         (train_loader, val_loader, test_loader)
+        test_loader는 data/processed/test/가 없으면 None
     """
     from utils.augmentation import PairedTransform
 
@@ -137,10 +138,22 @@ def create_dataloaders(
         data_dir, split="val",
         transform=PairedTransform(size=input_size, is_train=False),
     )
-    test_ds = NightVisionDataset(
-        data_dir, split="test",
-        transform=PairedTransform(size=input_size, is_train=False),
-    )
+
+    # test 데이터는 선택적 (없으면 None 반환)
+    test_loader = None
+    test_input_dir = Path(data_dir) / "test" / "input"
+    if test_input_dir.exists() and any(test_input_dir.iterdir()):
+        test_ds = NightVisionDataset(
+            data_dir, split="test",
+            transform=PairedTransform(size=input_size, is_train=False),
+        )
+        test_loader = DataLoader(
+            test_ds,
+            batch_size=1,
+            shuffle=False,
+            num_workers=num_workers,
+            pin_memory=pin_memory,
+        )
 
     train_loader = DataLoader(
         train_ds,
@@ -157,14 +170,8 @@ def create_dataloaders(
         num_workers=num_workers,
         pin_memory=pin_memory,
     )
-    test_loader = DataLoader(
-        test_ds,
-        batch_size=1,
-        shuffle=False,
-        num_workers=num_workers,
-        pin_memory=pin_memory,
-    )
 
+    test_count = len(test_loader.dataset) if test_loader else 0
     log.info(f"DataLoader 생성 완료: "
-             f"train={len(train_ds)}, val={len(val_ds)}, test={len(test_ds)}")
+             f"train={len(train_ds)}, val={len(val_ds)}, test={test_count}")
     return train_loader, val_loader, test_loader
