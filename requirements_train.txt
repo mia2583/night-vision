@@ -1,0 +1,11 @@
+# 학습 환경 의존성 (Google Colab GPU)
+torch>=1.13.0
+torchvision>=0.14.0
+onnx>=1.13.0
+onnxruntime>=1.14.0
+opencv-python>=4.5.0
+numpy>=1.21.0
+Pillow>=9.0.0
+scikit-image>=0.19.0
+matplotlib>=3.5.0
+tqdm>=4.64.0
