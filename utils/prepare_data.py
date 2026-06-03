@@ -14,9 +14,8 @@ LOL v1:
 
 커스텀 데이터:
   data/custom/
-  ├── train_input_img/   (빛 번짐 있는 원본)
-  ├── train_label_img/   (개선된 참고 이미지)
-  └── test_input_img/    (테스트, 정답 없음)
+  ├── input/    (저조도 / 빛 번짐 이미지)
+  └── target/   (정상 / 개선된 이미지, 동일 파일명)
 
 [출력 통일 구조]
 
@@ -24,11 +23,9 @@ data/processed/
 ├── train/
 │   ├── input/    (LOL our485 + 커스텀 80%)
 │   └── target/   (LOL our485 + 커스텀 80%)
-├── val/
-│   ├── input/    (LOL eval15 + 커스텀 20%)
-│   └── target/   (LOL eval15 + 커스텀 20%)
-└── test/
-    └── input/    (커스텀 test_input_img, 정답 없음)
+└── val/
+    ├── input/    (LOL eval15 + 커스텀 20%)
+    └── target/   (LOL eval15 + 커스텀 20%)
 
 파일명 규칙: {출처}_{원본파일명}
   예: lol_1.png, custom_1.png
@@ -63,22 +60,11 @@ def _get_image_pairs(input_dir: Path, target_dir: Path) -> List[Tuple[Path, Path
     return pairs
 
 
-def _get_single_images(input_dir: Path) -> List[Path]:
-    """단일 디렉터리에서 이미지 파일 목록 반환 (정답 없는 테스트용)."""
-    exts = {".png", ".jpg", ".jpeg", ".PNG", ".JPG"}
-    return sorted([f for f in input_dir.iterdir() if f.suffix in exts])
-
-
 def _copy_pair(inp: Path, tgt: Path,
                out_input: Path, out_target: Path, prefix: str) -> None:
     """이미지 쌍을 통일 구조로 복사."""
     shutil.copy2(inp, out_input / f"{prefix}_{inp.name}")
     shutil.copy2(tgt, out_target / f"{prefix}_{tgt.name}")
-
-
-def _copy_single(src: Path, out_input: Path, prefix: str) -> None:
-    """단일 이미지를 통일 구조로 복사."""
-    shutil.copy2(src, out_input / f"{prefix}_{src.name}")
 
 
 def _split_pairs(pairs: List, val_ratio: float, seed: int) -> Tuple[List, List]:
@@ -101,13 +87,18 @@ def prepare_data(
     """
     LOL과 커스텀 데이터를 통일 구조로 변환합니다.
 
+    커스텀 데이터 구조:
+      data/custom/
+      ├── input/    (저조도 / 빛 번짐 이미지)
+      └── target/   (정상 / 개선된 이미지, 동일 파일명)
+
     Args:
-        lol_dir: LOL 데이터셋 경로
-        custom_dir: 커스텀 데이터셋 경로
+        lol_dir:    LOL 데이터셋 경로
+        custom_dir: 커스텀 데이터셋 경로 (input/ + target/ 하위 폴더 구조)
         output_dir: 출력 경로 (통일 구조)
-        val_ratio: 커스텀 데이터 검증 분할 비율 (default: 0.2)
-        seed: 랜덤 분할 시드
-        force: True이면 기존 processed 데이터 삭제 후 재생성
+        val_ratio:  커스텀 데이터 검증 분할 비율 (default: 0.2)
+        seed:       랜덤 분할 시드
+        force:      True이면 기존 processed 데이터 삭제 후 재생성
 
     Returns:
         dict: 데이터셋 통계 정보
@@ -120,8 +111,7 @@ def prepare_data(
             with open(meta_path) as f:
                 meta = json.load(f)
             log.info(f"이미 처리된 데이터가 존재합니다: {output_path}")
-            log.info(f"  train: {meta['total_train']}, val: {meta['total_val']}, "
-                     f"test: {meta['total_test']}")
+            log.info(f"  train: {meta['total_train']}, val: {meta['total_val']}")
             log.info("재생성하려면 --force 옵션을 사용하세요.")
             return meta
 
@@ -135,14 +125,13 @@ def prepare_data(
         "train_target": output_path / "train" / "target",
         "val_input":    output_path / "val" / "input",
         "val_target":   output_path / "val" / "target",
-        "test_input":   output_path / "test" / "input",
     }
     for d in dirs.values():
         d.mkdir(parents=True, exist_ok=True)
 
     stats = {
         "lol_train": 0, "lol_val": 0,
-        "custom_train": 0, "custom_val": 0, "custom_test": 0,
+        "custom_train": 0, "custom_val": 0,
     }
 
     # ── LOL Dataset 처리 ──────────────────────────────────────────
@@ -172,20 +161,17 @@ def prepare_data(
             _copy_pair(inp, tgt, dirs["val_input"], dirs["val_target"], "lol")
         stats["lol_val"] = len(pairs)
         log.info(f"  LOL 검증: {len(pairs)}쌍")
-    else:
-        if lol_available:
-            log.warning(f"LOL eval15 없음, 스킵: {lol_val_low}")
+    elif lol_available:
+        log.warning(f"LOL eval15 없음, 스킵: {lol_val_low}")
 
     # ── 커스텀 데이터 처리 ─────────────────────────────────────────
     custom_path = Path(custom_dir)
+    custom_input  = custom_path / "input"
+    custom_target = custom_path / "target"
 
-    custom_train_input = custom_path / "train_input_img"
-    custom_train_label = custom_path / "train_label_img"
-    custom_test_input  = custom_path / "test_input_img"
-
-    if custom_train_input.exists() and custom_train_label.exists():
-        log.info(f"커스텀 학습 데이터 처리 중 (80/20 분할)...")
-        pairs = _get_image_pairs(custom_train_input, custom_train_label)
+    if custom_input.exists() and custom_target.exists():
+        log.info(f"커스텀 데이터 처리 중 (80/20 분할)...")
+        pairs = _get_image_pairs(custom_input, custom_target)
         train_pairs, val_pairs = _split_pairs(pairs, val_ratio, seed)
 
         for inp, tgt in train_pairs:
@@ -197,28 +183,18 @@ def prepare_data(
         stats["custom_val"] = len(val_pairs)
         log.info(f"  커스텀 학습: {len(train_pairs)}쌍, 검증: {len(val_pairs)}쌍")
     else:
-        log.warning(f"커스텀 학습 데이터 없음, 스킵: {custom_train_input}")
-
-    if custom_test_input.exists():
-        log.info("커스텀 테스트 데이터 처리 중...")
-        files = _get_single_images(custom_test_input)
-        for f in files:
-            _copy_single(f, dirs["test_input"], "custom")
-        stats["custom_test"] = len(files)
-        log.info(f"  커스텀 테스트: {len(files)}장")
-    else:
-        log.warning(f"커스텀 테스트 데이터 없음, 스킵: {custom_test_input}")
-
-    if not lol_available and stats["custom_train"] == 0:
-        raise RuntimeError(
-            "LOL 데이터와 커스텀 데이터 모두 없습니다. "
-            "최소 하나의 데이터셋이 필요합니다."
-        )
+        if not lol_available:
+            raise RuntimeError(
+                "LOL 데이터와 커스텀 데이터 모두 없습니다. "
+                "최소 하나의 데이터셋이 필요합니다.\n"
+                f"  LOL: {lol_path}\n"
+                f"  커스텀: {custom_path} (input/ + target/ 하위 폴더 필요)"
+            )
+        log.info(f"커스텀 데이터 없음, LOL만 사용: {custom_path}")
 
     # ── 메타데이터 저장 ───────────────────────────────────────────
     total_train = stats["lol_train"] + stats["custom_train"]
     total_val   = stats["lol_val"] + stats["custom_val"]
-    total_test  = stats["custom_test"]
 
     metadata = {
         "created_at": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
@@ -228,7 +204,6 @@ def prepare_data(
         **stats,
         "total_train": total_train,
         "total_val": total_val,
-        "total_test": total_test,
     }
     meta_path = output_path / "metadata.json"
     with open(meta_path, "w") as f:
@@ -236,9 +211,8 @@ def prepare_data(
 
     log.info("=" * 50)
     log.info("데이터 준비 완료!")
-    log.info(f"  학습 : {total_train}쌍  (LOL {stats['lol_train']} + 커스텀 {stats['custom_train']})")
-    log.info(f"  검증 : {total_val}쌍   (LOL {stats['lol_val']} + 커스텀 {stats['custom_val']})")
-    log.info(f"  테스트: {total_test}장  (커스텀, 정답 없음)")
+    log.info(f"  학습: {total_train}쌍  (LOL {stats['lol_train']} + 커스텀 {stats['custom_train']})")
+    log.info(f"  검증: {total_val}쌍   (LOL {stats['lol_val']} + 커스텀 {stats['custom_val']})")
     log.info(f"  저장 위치: {output_path}")
     log.info("=" * 50)
 
