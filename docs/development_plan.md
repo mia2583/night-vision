@@ -100,42 +100,39 @@ STEP 11. 리팩토링 및 문서화 마무리
 
 ---
 
-## STEP 3. Zero-DCE 모델 구현
+## STEP 3. Zero-DCE 모델 구현 ✅
 
-**Git 브랜치:** `feature/zerodce-model`  
+**Git 브랜치:** `feature/zerodce-model` (완료)  
 **목표:** Zero-DCE 아키텍처를 PyTorch로 구현하고 forward pass 검증
 
-### 3-1. DCENet (백본 CNN) 구현
+### 3-1. DCENet (백본 CNN) 구현 ✅
 - `models/zerodce.py`에 `DCENet` 클래스 구현
-- 7개 Conv 레이어 구성:
-  - Conv1~4: `Conv2d(in, 32, 3, padding=1)` + `ReLU`
-  - Conv5~6: `Conv2d(32, 32, 3, padding=1)` + `ReLU` (skip connection으로 concat)
-  - Conv7: `Conv2d(32, 24, 3, padding=1)` + `Tanh` (출력: 24채널 곡선 파라미터)
-- Skip connection: Conv4 출력과 Conv5~7 입력 concat
+- 7개 Conv 레이어 + 대칭 skip connection (U-Net 형태):
+  - Conv1~4: encoder (3→32→32→32→32)
+  - Conv5: cat[Conv4, Conv3] → 64→32
+  - Conv6: cat[Conv5, Conv2] → 64→32
+  - Conv7: cat[Conv6, Conv1] → 64→24, Tanh
 
-### 3-2. Curve Adjustment 모듈 구현
+### 3-2. CurveAdjustment 모듈 구현 ✅
 - `models/zerodce.py`에 `CurveAdjustment` 클래스 구현
-- 8회 반복 곡선 변환:
-  ```
-  LE_n = LE_{n-1} + A_n * LE_{n-1} * (1 - LE_{n-1})
-  ```
-- 채널별(R/G/B) 독립적으로 파라미터 적용
-- 출력값 clamp: `[0, 1]` 범위 유지
+- 8회 반복 곡선 변환: `LE_n = LE_{n-1} + A_n * LE_{n-1} * (1 - LE_{n-1})`
+- 채널별(R/G/B) 독립 파라미터, 각 반복 후 `clamp(0, 1)`
 
-### 3-3. ZeroDCE 통합 모델 클래스
-- `DCENet` + `CurveAdjustment`를 하나로 묶는 `ZeroDCE` 클래스
-- `forward(x)`: 입력 이미지 → (개선된 이미지, 곡선 파라미터) 반환
-- 곡선 파라미터는 손실함수 계산에 사용
+### 3-3. ZeroDCE 통합 모델 클래스 ✅
+- `ZeroDCE`: DCENet + CurveAdjustment 통합
+- `forward(x)` → `(enhanced, curve_params)` 반환
 
-### 3-4. 모델 저장/로드 유틸리티
-- `save_model(model, path, epoch, psnr)`: 체크포인트 저장
-- `load_model(path)`: 체크포인트 로드
-- `load_pretrained(model, path)`: 사전학습 가중치만 로드 (파인튜닝용)
+### 3-4. 모델 저장/로드 유틸리티 ✅
+- `save_model(model, path, epoch, psnr, optimizer_state)`: 체크포인트 저장
+- `load_model(path, device)`: 체크포인트 로드, eval 모드 반환
 
-### 3-5. 모델 구조 검증
-- 입력 `(1, 3, 192, 192)` → 출력 `(1, 3, 192, 192)` 형상 확인
-- 파라미터 수 확인 (~79K)
-- GPU/CPU 동작 확인
+### 3-5. 검증 스크립트 구성 ✅
+- `validation/verify_model.py`: 파라미터 수, 형상, 역전파, 추론 속도 검증
+- `validation/verify_data.py`: 데이터 구조, 로딩, 배치, 증강 검증
+- 검증 결과: 파라미터 79,416개 ✓, 형상 ✓, 역전파 ✓, CPU 15.7 FPS (ONNX 최적화 전)
+
+### 3-6. 모델 구조 문서화 ✅
+- `docs/zeroDCE_모델_구조_설명.md`: 아키텍처 다이어그램, 수식 해설, 논문 차이점 정리
 
 ---
 
