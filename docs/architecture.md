@@ -233,52 +233,37 @@ Loss_total = L_spa + L_exp + L_col + L_tvA + λ * L_glare
 수식: L_glare = Σ ||mask_glare * I_enhanced||²
       mask_glare: 입력 이미지에서 임계값 이상의 고강도 영역
       (threshold: 0.8 이상인 픽셀)
-가중치: λ (0.1 ~ 0.5, 파인튜닝 시 조정)
+가중치: λ (0.1 ~ 0.5, 학습 중 조정)
 효과: 야간 헤드라이트, 가로등 빛 번짐 억제
 ```
 
-### 4.3 손실함수 가중치 조정 전략
+### 4.3 손실함수 가중치
 
 ```
-사전학습 (LOL Dataset, Stage 1):
-    λ = 0 (glare 손실 미적용, 밝기 개선 기초 학습에 집중)
-    Loss = L_spa + L_exp + L_col + L_tvA
-
-파인튜닝 (커스텀 데이터, Stage 2):
-    λ = 0.1 (초기값)
-    → PSNR/SSIM 모니터링하며 0.1 ~ 0.5 범위 탐색
+통합 데이터셋 단일 학습:
     Loss = L_spa + L_exp + L_col + L_tvA + λ * L_glare
+
+    w_spa=1.0, w_exp=10.0, w_col=5.0, w_tva=200.0
+    λ: 0.1 초기값 → PSNR 모니터링하며 0.1~0.5 범위 탐색
 ```
 
 ---
 
 ## 5. 학습 파이프라인 아키텍처
 
-### 5.1 2단계 학습 전략
+### 5.1 통합 단일 학습 전략
 
 ```
-[Stage 1: LOL Dataset 사전학습]
+[통합 데이터셋 학습]
           ↓
-데이터: LOL (485쌍, 실내 저조도)
+데이터: LOL (485쌍) + 커스텀 (600+쌍) → data/processed/ 혼합
 모델: Zero-DCE (랜덤 초기화)
-손실: L_spa + L_exp + L_col + L_tvA (λ=0)
-옵티마이저: Adam (lr=0.0001)
-배치: 16, 에포크: 100
-환경: Colab GPU
-          ↓ 저장
-zerodce_pretrain.pt
-          │
-          ▼
-[Stage 2: 커스텀 데이터 파인튜닝]
-          ↓
-데이터: 커스텀 (600+쌍, 야간 운전+빛 번짐)
-모델: Zero-DCE (사전학습 가중치 로드)
 손실: L_spa + L_exp + L_col + L_tvA + λ * L_glare
-옵티마이저: Adam (lr=0.00001, 학습률 10배 감소)
-배치: 8, 에포크: 50
+옵티마이저: Adam (lr=0.0001)
+배치: 16, 에포크: 200
 환경: Colab GPU
           ↓ 저장
-zerodce_finetuned.pt
+zerodce_trained.pt
 ```
 
 ### 5.2 학습 루프 구조
@@ -318,11 +303,9 @@ for epoch in range(num_epochs):
 
 ```
 models/pretrained/
-├── zerodce_pretrain.pt          # Stage 1 최종
-├── zerodce_pretrain_best.pt     # Stage 1 PSNR 최고
-├── zerodce_finetuned.pt         # Stage 2 최종
-├── zerodce_finetuned_best.pt    # Stage 2 PSNR 최고
-└── zerodce_final.onnx           # 배포용 ONNX
+├── zerodce_trained.pt           # 통합 학습 최종 모델
+├── zerodce_trained_best.pt      # PSNR 최고 체크포인트
+└── zerodce_final.onnx           # 배포용 ONNX (FP16)
 ```
 
 ---
@@ -332,10 +315,10 @@ models/pretrained/
 ### 6.1 모델 최적화 흐름
 
 ```
-zerodce_finetuned.pt (PyTorch FP32)
+zerodce_trained.pt (PyTorch FP32)
         │
         ▼ torch.onnx.export
-zerodce_finetuned.onnx (ONNX FP32)
+zerodce_trained.onnx (ONNX FP32)
         │
         ▼ onnxruntime quantization (FP16)
 zerodce_final.onnx (ONNX FP16)    ← 배포 기본 모델
@@ -475,30 +458,45 @@ night-vision/
 │
 ├── models/                          # 모델 코드
 │   ├── __init__.py
-│   ├── zerodce.py                   # Zero-DCE 아키텍처
-│   ├── losses.py                    # 손실함수 (5종)
+│   ├── zerodce.py                   # Zero-DCE 아키텍처 (DCENet + CurveAdjustment)
+│   ├── losses.py                    # 손실함수 5종 (STEP 4)
+│   ├── optimizations.py             # FP16/INT8 양자화 (STEP 7)
 │   └── pretrained/                  # 학습된 가중치 (gitignore)
-│       ├── zerodce_pretrain.pt
-│       ├── zerodce_finetuned.pt
-│       └── zerodce_final.onnx
+│       ├── zerodce_trained.pt       # 통합 데이터셋 학습 모델
+│       └── zerodce_final.onnx       # 배포용 ONNX (FP16)
 │
 ├── training/                        # 학습 관련
 │   ├── __init__.py
-│   ├── train.py                     # 학습 스크립트 (CLI)
-│   ├── train_colab.ipynb            # Colab 노트북
-│   └── callbacks.py                 # 체크포인트, 로깅
+│   ├── train.py                     # 학습 스크립트 (STEP 5)
+│   ├── callbacks.py                 # 체크포인트, 로깅 (STEP 5)
+│   ├── data_prep_colab.ipynb        # Colab 데이터 준비 노트북
+│   └── train_colab.ipynb            # Colab 모델 학습 노트북
 │
 ├── inference/                       # 추론 관련
 │   ├── __init__.py
-│   ├── inference.py                 # NightVisionEnhancer 클래스
-│   ├── onnx_converter.py            # PyTorch → ONNX 변환
-│   └── benchmark.py                 # FPS/지연시간 측정
+│   ├── inference.py                 # NightVisionEnhancer 클래스 (STEP 8)
+│   ├── onnx_converter.py            # PyTorch → ONNX 변환 (STEP 7)
+│   └── benchmark.py                 # FPS/지연시간 측정 (STEP 7)
 │
 ├── utils/                           # 공통 유틸리티
 │   ├── __init__.py
-│   ├── data_loader.py               # Dataset, DataLoader
-│   ├── augmentation.py              # 데이터 증강
+│   ├── download_lol.py              # LOL Dataset 자동 다운로드
+│   ├── prepare_data.py              # 통일 구조 변환 (LOL + 커스텀)
+│   ├── data_loader.py               # NightVisionDataset, DataLoader
+│   ├── augmentation.py              # PairedTransform (공간/광도 증강)
 │   └── visualization.py            # 결과 시각화
+│
+├── validation/                      # 검증 스크립트
+│   ├── verify_model.py              # 모델 구조/형상/역전파/속도 검증
+│   └── verify_data.py               # 데이터 파이프라인 검증
+│
+├── docs/                            # 문서
+│   ├── architecture.md              # 이 파일
+│   ├── development_plan.md          # 개발 계획서
+│   ├── 데이터_준비.md                # 데이터 준비 사용 가이드
+│   ├── zeroDCE_모델_구조_설명.md     # Zero-DCE 모델 상세 설명
+│   ├── 요구사항_정의서.md
+│   └── 커밋_메시지_규칙.md
 │
 ├── templates/
 │   └── template.html               # Flask 웹 UI
@@ -558,7 +556,7 @@ tqdm>=4.64.0            # 진행 표시
 |------|------|----------|
 | Zero-DCE | MIRNet | MIRNet CPU 0.5~1 FPS vs Zero-DCE 25~40 FPS |
 | FP16 양자화 | INT8 | 이미지 복원 모델에서 INT8은 PSNR 5~10 dB 손실 위험 |
-| 2단계 학습 | 혼합 학습 | LOL(실내)↔커스텀(야외) 도메인 불일치 방지 |
+| 통합 단일 학습 | 2단계 학습 | 데이터 다양성이 일반화에 유리, 파이프라인 단순화 |
 | ONNX Runtime | PyTorch CPU | ONNX가 멀티스레드 CPU 최적화 지원 |
 | 192x192 처리 | 256x256 | CPU 30 FPS 달성을 위한 최적 해상도 |
 | Retinex 손실 | Perceptual Loss | 야간 시각의 물리적 원리 기반, 빛 번짐 억제 항 추가 용이 |
