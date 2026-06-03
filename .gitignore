@@ -186,3 +186,23 @@ pyvenv.cfg
 pip-selfcheck.json
 
 # End of https://www.toptal.com/developers/gitignore/api/python,venv
+
+## claude code
+CLAUDE.md
+docs/커밋_메시지_규칙.md
+
+## 데이터 (대용량 이미지)
+data/lol/
+data/custom/
+data/processed/
+
+## 학습된 모델 가중치
+models/pretrained/*.pt
+models/pretrained/*.pth
+models/pretrained/*.onnx
+
+## 학습 로그 및 결과
+training_log.csv
+*.log
+docs/benchmark_results.md
+docs/evaluation_results.md
